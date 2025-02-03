@@ -1,74 +1,102 @@
-from diffusers import StableDiffusionPipeline
+import os
+import torch
+from diffusers import AutoPipelineForText2Image
 from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
 from transformers import TrainingArguments, Trainer
-import torch
-import os
 from PIL import Image
 
+# 🔹 Пути к моделям
+MODEL_PATH = "./models/flux-1"
+DATASET_PATH = "./dataset"
+TRAINED_MODEL_PATH = "./trained_model"
+
+# 🔹 Ссылка на модель Hugging Face
+MODEL_HF = "black-forest-labs/FLUX.1-schnell"
+
+
+# 🔹 Функция проверки наличия модели
+def is_model_downloaded():
+    return os.path.exists(MODEL_PATH)
+
+
+# 🔹 Функция загрузки модели (если не скачана)
+def download_model():
+    if not is_model_downloaded():
+        print("⚡ Загружаем модель FLUX AI...")
+        os.system(f"huggingface-cli download {MODEL_HF} --local-dir {MODEL_PATH}")
+        print("✅ Модель загружена!")
+
+
+# 🔹 Функция обучения модели на 10 фото
 def train_model():
-    print("Обучение модели...")
-    
-    # Загружаем основную модель
-    pipeline = StableDiffusionPipeline.from_pretrained("black-forest-labs/FLUX.1-schnell")
+    print("🚀 Обучение модели...")
+
+    # Используем универсальный загрузчик
+    pipeline = AutoPipelineForText2Image.from_pretrained(MODEL_PATH)
     pipeline.to("cuda")
 
-    # Загружаем изображения
-    dataset_path = "dataset"
-    images = [Image.open(os.path.join(dataset_path, img)) for img in os.listdir(dataset_path)]
+    # Загружаем изображения из папки
+    if not os.path.exists(DATASET_PATH):
+        print("❌ Ошибка: Папка с фото не найдена!")
+        return
 
-    # Подготовка LoRA-конфигурации
+    images = [Image.open(os.path.join(DATASET_PATH, img)) for img in os.listdir(DATASET_PATH) if img.endswith((".jpg", ".png"))]
+
+    if len(images) < 10:
+        print("❌ Ошибка: Нужно минимум 10 фото для обучения!")
+        return
+
+    # Конфигурация LoRA
     lora_config = LoraConfig(
-        r=8,  # Размер адаптера
-        lora_alpha=32,
-        lora_dropout=0.05,
-        target_modules=["crossattention", "to_q", "to_v"],  # Обучаемые слои
+        r=8, lora_alpha=32, lora_dropout=0.05,
+        target_modules=["crossattention", "to_q", "to_v"],
         bias="none",
         task_type="TEXT_TO_IMAGE_GENERATION"
     )
 
-    # Добавляем LoRA в модель
     model = get_peft_model(pipeline.unet, lora_config)
     model = prepare_model_for_kbit_training(model)
 
-    # Настройки обучения
     training_args = TrainingArguments(
-        output_dir="trained_model",
+        output_dir=TRAINED_MODEL_PATH,
         per_device_train_batch_size=1,
         num_train_epochs=5,
         save_strategy="epoch",
         logging_dir="logs"
     )
 
-    # Запускаем обучение
-    trainer = Trainer(
-        model=model,
-        args=training_args,
-        train_dataset=images
-    )
-
+    trainer = Trainer(model=model, args=training_args, train_dataset=images)
     trainer.train()
 
-    # Сохраняем модель
-    model.save_pretrained("trained_model")
-    print("Обучение завершено!")
+    model.save_pretrained(TRAINED_MODEL_PATH)
+    print("✅ Обучение завершено!")
 
-# Функция генерации изображения
+
+# 🔹 Функция генерации изображений
 def generate_image():
-    if not os.path.exists("trained_model"):
-        print("Ошибка: модель не обучена!")
+    if not os.path.exists(TRAINED_MODEL_PATH):
+        print("❌ Ошибка: Модель не обучена! Сначала запустите обучение.")
         return
 
-    pipeline = StableDiffusionPipeline.from_pretrained("trained_model")
+    print("⚡ Загружаем обученную модель...")
+    pipeline = AutoPipelineForText2Image.from_pretrained(TRAINED_MODEL_PATH)
     pipeline.to("cuda")
 
-    prompt = input("Введите промпт для генерации: ")
+    prompt = input("Введите описание изображения: ")
+    print("🎨 Генерация изображения...")
+    
     image = pipeline(prompt).images[0]
     image.save("generated_image.png")
-    print("Изображение сохранено как generated_image.png")
+    
+    print("✅ Изображение сохранено: generated_image.png")
 
-# Главное меню
+
+# 🔹 Главное меню
 def main():
-    print("Выберите действие:")
+    # Загружаем модель, если её нет
+    download_model()
+
+    print("\nВыберите действие:")
     print("1 - Обучить модель")
     print("2 - Сгенерировать изображение")
     
@@ -78,7 +106,9 @@ def main():
     elif choice == "2":
         generate_image()
     else:
-        print("Ошибка: неверный ввод!")
+        print("❌ Ошибка: Неверный ввод!")
 
+
+# 🔹 Запуск программы
 if __name__ == "__main__":
     main()
